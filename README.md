@@ -1,4 +1,4 @@
-# Eva Nails - CS4750 Database Project
+# CS4750 Database Project
 
 UVA CS4750 - Nail Salon Management System
 
