@@ -6,7 +6,7 @@ from flask import (Flask, flash, redirect, render_template, request,
                    session, url_for, Response)
 
 import config
-from db import query
+from db import get_db, query
 
 app = Flask(__name__)
 app.secret_key = config.SECRET_KEY
@@ -26,12 +26,76 @@ def login_required(f):
     return wrapper
 
 
+def admin_required(f):
+    from functools import wraps
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        if 'user' not in session:
+            return redirect(url_for('login'))
+        if session.get('role') != 'admin':
+            flash('Customers can only register, book appointments, view their appointments and purchases, and view services.', 'warning')
+            return redirect(url_for('appointments'))
+        return f(*args, **kwargs)
+    return wrapper
+
+
+CUSTOMER_ALLOWED_ENDPOINTS = {
+    'static',
+    'index',
+    'login',
+    'logout',
+    'register',
+    'appointments',
+    'appointment_add',
+    'purchases',
+    'services',
+}
+
+
+def is_customer():
+    return session.get('role') == 'customer'
+
+
+def current_customer_id():
+    return session.get('customer_id')
+
+
+def clear_result_sets(cur):
+    while cur.nextset():
+        pass
+
+
+def call_customer_procedure(sql, args=None, fetch=True, commit=False):
+    conn = get_db(customer=True, customer_id=current_customer_id())
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql, args or ())
+            rows = cur.fetchall() if fetch else None
+        if commit:
+            conn.commit()
+        return rows
+    finally:
+        conn.close()
+
+
+@app.before_request
+def restrict_customer_routes():
+    if session.get('role') != 'customer':
+        return None
+    if request.endpoint in CUSTOMER_ALLOWED_ENDPOINTS:
+        return None
+    flash('Customers can only register, book appointments, view their appointments and purchases, and view services.', 'warning')
+    return redirect(url_for('appointments'))
+
+
 # ---------------------------------------------------------------------------
 # Auth routes
 # ---------------------------------------------------------------------------
 
 @app.route('/', methods=['GET'])
 def index():
+    if is_customer():
+        return redirect(url_for('appointments'))
     return redirect(url_for('dashboard'))
 
 
@@ -42,10 +106,55 @@ def login():
         password = request.form.get('password', '').strip()
         if username == config.ADMIN_USERNAME and password == config.ADMIN_PASSWORD:
             session['user'] = username
+            session['role'] = 'admin'
             flash('Welcome back!', 'success')
             return redirect(url_for('dashboard'))
+
+        customer = query(
+            '''SELECT customerID, customer_name
+               FROM customer
+               WHERE CAST(customerID AS CHAR) = %s AND phone_number = %s''',
+            (username, password),
+            one=True,
+        )
+        if customer:
+            session['user'] = customer['customer_name']
+            session['role'] = 'customer'
+            session['customer_id'] = customer['customerID']
+            flash('Welcome back!', 'success')
+            return redirect(url_for('appointments'))
+
         flash('Invalid username or password.', 'danger')
     return render_template('login.html')
+
+
+@app.route('/register', methods=['GET', 'POST'])
+def register():
+    if request.method == 'POST':
+        name = request.form.get('customer_name', '').strip()
+        phone = request.form.get('phone_number', '').strip()
+        if not name or not phone:
+            flash('Name and phone number are required.', 'warning')
+            return render_template('customer_form.html', action='Register', customer=None)
+
+        conn = get_db(customer=True)
+        try:
+            with conn.cursor() as cur:
+                cur.execute('CALL customer_register(%s, %s, @new_customer_id)', (name, phone))
+                clear_result_sets(cur)
+                cur.execute('SELECT @new_customer_id AS customerID')
+                customer_id = cur.fetchone()['customerID']
+            conn.commit()
+        finally:
+            conn.close()
+
+        session['user'] = name
+        session['role'] = 'customer'
+        session['customer_id'] = customer_id
+        flash('Registration complete.', 'success')
+        return redirect(url_for('appointments'))
+
+    return render_template('customer_form.html', action='Register', customer=None)
 
 
 @app.route('/logout')
@@ -62,6 +171,9 @@ def logout():
 @app.route('/dashboard')
 @login_required
 def dashboard():
+    if is_customer():
+        return redirect(url_for('appointments'))
+
     today = date.today().isoformat()
 
     total_customers = query('SELECT COUNT(*) AS n FROM customer', one=True)['n']
@@ -125,7 +237,7 @@ def dashboard():
 # ---------------------------------------------------------------------------
 
 @app.route('/customers')
-@login_required
+@admin_required
 def customers():
     search = request.args.get('search', '').strip()
     if search:
@@ -141,7 +253,7 @@ def customers():
 
 
 @app.route('/customers/add', methods=['GET', 'POST'])
-@login_required
+@admin_required
 def customer_add():
     if request.method == 'POST':
         name  = request.form['customer_name'].strip()
@@ -149,12 +261,10 @@ def customer_add():
         if not name or not phone:
             flash('Name and phone number are required.', 'warning')
             return render_template('customer_form.html', action='Add', customer=None)
-        # Get next ID
-        max_id = query('SELECT COALESCE(MAX(customerID), 0) AS m FROM customer', one=True)['m']
         try:
             query(
-                'INSERT INTO customer (customerID, customer_name, phone_number) VALUES (%s, %s, %s)',
-                (max_id + 1, name, phone), commit=True
+                'INSERT INTO customer (customer_name, phone_number) VALUES (%s, %s)',
+                (name, phone), commit=True
             )
             flash(f'Customer "{name}" added.', 'success')
             return redirect(url_for('customers'))
@@ -164,7 +274,7 @@ def customer_add():
 
 
 @app.route('/customers/<int:cid>/edit', methods=['GET', 'POST'])
-@login_required
+@admin_required
 def customer_edit(cid):
     customer = query('SELECT * FROM customer WHERE customerID = %s', (cid,), one=True)
     if not customer:
@@ -186,7 +296,7 @@ def customer_edit(cid):
 
 
 @app.route('/customers/<int:cid>/delete', methods=['POST'])
-@login_required
+@admin_required
 def customer_delete(cid):
     try:
         query('DELETE FROM customer WHERE customerID=%s', (cid,), commit=True)
@@ -205,6 +315,17 @@ def customer_delete(cid):
 def appointments():
     date_filter = request.args.get('date', '').strip()
     tech_filter = request.args.get('technician', '').strip()
+
+    if is_customer():
+        rows = call_customer_procedure('CALL customer_view_appointments()')
+        if date_filter:
+            rows = [row for row in rows if str(row['appointment_date']) == date_filter]
+        return render_template('appointments.html',
+            appointments=rows,
+            technicians=[],
+            date_filter=date_filter,
+            tech_filter='',
+        )
 
     sql = '''
         SELECT a.appointmentID, c.customer_name, c.customerID,
@@ -242,11 +363,34 @@ def appointments():
 @app.route('/appointments/add', methods=['GET', 'POST'])
 @login_required
 def appointment_add():
-    customers_list  = query('SELECT * FROM customer ORDER BY customer_name')
-    services_list   = query('SELECT * FROM service ORDER BY service_name')
-    technicians_list = query('SELECT * FROM technician ORDER BY technician_name')
+    if is_customer():
+        customers_list = []
+        services_list = call_customer_procedure('CALL customer_view_services()')
+        technicians_list = []
+    else:
+        customers_list  = query('SELECT * FROM customer ORDER BY customer_name')
+        services_list   = query('SELECT * FROM service ORDER BY service_name')
+        technicians_list = query('SELECT * FROM technician ORDER BY technician_name')
 
     if request.method == 'POST':
+        if is_customer():
+            appt_date = request.form['appointment_date']
+            conn = get_db(customer=True, customer_id=current_customer_id())
+            try:
+                with conn.cursor() as cur:
+                    cur.execute('CALL customer_book_appointment(%s, @new_appointment_id)', (appt_date,))
+                    clear_result_sets(cur)
+                    cur.execute('SELECT @new_appointment_id AS appointmentID')
+                    cur.fetchone()
+                conn.commit()
+                flash('Appointment booked successfully!', 'success')
+                return redirect(url_for('appointments'))
+            except Exception as e:
+                conn.rollback()
+                flash(f'Error booking appointment: {e}', 'danger')
+            finally:
+                conn.close()
+
         cid          = int(request.form['customerID'])
         service_name = request.form['service_name']
         tech_id      = int(request.form['technicianID'])
@@ -261,19 +405,17 @@ def appointment_add():
         try:
             with conn.cursor() as cur:
                 # 1. purchase
-                cur.execute('SELECT COALESCE(MAX(purchaseID),0)+1 AS nid FROM purchase')
-                purchase_id = cur.fetchone()['nid']
                 cur.execute(
-                    'INSERT INTO purchase (purchaseID, customerID, cost, purchase_date) VALUES (%s,%s,%s,%s)',
-                    (purchase_id, cid, cost, appt_date)
+                    'INSERT INTO purchase (customerID, cost, purchase_date) VALUES (%s,%s,%s)',
+                    (cid, cost, appt_date)
                 )
+                purchase_id = cur.lastrowid
                 # 2. appointment
-                cur.execute('SELECT COALESCE(MAX(appointmentID),0)+1 AS nid FROM appointment')
-                appt_id = cur.fetchone()['nid']
                 cur.execute(
-                    'INSERT INTO appointment (appointmentID, customerID, purchaseID, appointment_date) VALUES (%s,%s,%s,%s)',
-                    (appt_id, cid, purchase_id, appt_date)
+                    'INSERT INTO appointment (customerID, purchaseID, appointment_date) VALUES (%s,%s,%s)',
+                    (cid, purchase_id, appt_date)
                 )
+                appt_id = cur.lastrowid
                 # 3. orders
                 cur.execute('INSERT INTO orders (service_name, appointmentID) VALUES (%s,%s)',
                             (service_name, appt_id))
@@ -298,7 +440,7 @@ def appointment_add():
 
 
 @app.route('/appointments/<int:aid>/delete', methods=['POST'])
-@login_required
+@admin_required
 def appointment_delete(aid):
     import pymysql
     conn = __import__('db').get_db()
@@ -324,18 +466,40 @@ def appointment_delete(aid):
 
 
 # ---------------------------------------------------------------------------
+# Purchases
+# ---------------------------------------------------------------------------
+
+@app.route('/purchases')
+@login_required
+def purchases():
+    if is_customer():
+        rows = call_customer_procedure('CALL customer_view_purchases()')
+    else:
+        rows = query(
+            '''SELECT p.purchaseID, p.customerID, c.customer_name, p.cost, p.purchase_date
+               FROM purchase p
+               JOIN customer c ON p.customerID = c.customerID
+               ORDER BY p.purchase_date DESC, p.purchaseID DESC'''
+        )
+    return render_template('purchases.html', purchases=rows)
+
+
+# ---------------------------------------------------------------------------
 # Services
 # ---------------------------------------------------------------------------
 
 @app.route('/services')
 @login_required
 def services():
-    rows = query('SELECT * FROM service ORDER BY service_name')
+    if is_customer():
+        rows = call_customer_procedure('CALL customer_view_services()')
+    else:
+        rows = query('SELECT * FROM service ORDER BY service_name')
     return render_template('services.html', services=rows)
 
 
 @app.route('/services/add', methods=['POST'])
-@login_required
+@admin_required
 def service_add():
     name = request.form['service_name'].strip()
     cost = request.form['service_cost'].strip()
@@ -349,7 +513,7 @@ def service_add():
 
 
 @app.route('/services/<path:name>/delete', methods=['POST'])
-@login_required
+@admin_required
 def service_delete(name):
     try:
         query('DELETE FROM service WHERE service_name=%s', (name,), commit=True)
@@ -364,7 +528,7 @@ def service_delete(name):
 # ---------------------------------------------------------------------------
 
 @app.route('/products')
-@login_required
+@admin_required
 def products():
     type_filter = request.args.get('type', '').strip()
     if type_filter:
@@ -379,7 +543,7 @@ def products():
 
 
 @app.route('/products/update', methods=['POST'])
-@login_required
+@admin_required
 def product_update():
     name     = request.form['product_name']
     new_qty  = request.form['stock_quantity']
@@ -393,7 +557,7 @@ def product_update():
 
 
 @app.route('/products/add', methods=['POST'])
-@login_required
+@admin_required
 def product_add():
     name  = request.form['product_name'].strip()
     qty   = request.form['stock_quantity'].strip()
@@ -408,7 +572,7 @@ def product_add():
 
 
 @app.route('/products/<path:name>/delete', methods=['POST'])
-@login_required
+@admin_required
 def product_delete(name):
     try:
         query('DELETE FROM product WHERE product_name=%s', (name,), commit=True)
@@ -423,7 +587,7 @@ def product_delete(name):
 # ---------------------------------------------------------------------------
 
 @app.route('/technicians')
-@login_required
+@admin_required
 def technicians():
     rows = query(
         '''SELECT t.technicianID, t.technician_name, t.phone,
@@ -437,14 +601,13 @@ def technicians():
 
 
 @app.route('/technicians/add', methods=['POST'])
-@login_required
+@admin_required
 def technician_add():
     name  = request.form['technician_name'].strip()
     phone = request.form['phone'].strip()
-    max_id = query('SELECT COALESCE(MAX(technicianID),0) AS m FROM technician', one=True)['m']
     try:
-        query('INSERT INTO technician (technicianID, technician_name, phone) VALUES (%s,%s,%s)',
-              (max_id+1, name, phone), commit=True)
+        query('INSERT INTO technician (technician_name, phone) VALUES (%s,%s)',
+              (name, phone), commit=True)
         flash(f'Technician "{name}" added.', 'success')
     except Exception as e:
         flash(f'Error: {e}', 'danger')
@@ -452,7 +615,7 @@ def technician_add():
 
 
 @app.route('/technicians/<int:tid>/delete', methods=['POST'])
-@login_required
+@admin_required
 def technician_delete(tid):
     try:
         query('DELETE FROM technician WHERE technicianID=%s', (tid,), commit=True)
@@ -467,7 +630,7 @@ def technician_delete(tid):
 # ---------------------------------------------------------------------------
 
 @app.route('/supply-orders')
-@login_required
+@admin_required
 def supply_orders():
     orders = query(
         '''SELECT so.orderID, so.order_date, so.delivery_date, so.cost,
@@ -481,17 +644,16 @@ def supply_orders():
 
 
 @app.route('/supply-orders/add', methods=['POST'])
-@login_required
+@admin_required
 def supply_order_add():
     supplier_id   = request.form['supplierID']
     cost          = request.form['cost']
     order_date    = request.form['order_date']
     delivery_date = request.form['delivery_date']
-    max_id = query('SELECT COALESCE(MAX(orderID),0) AS m FROM supply_order', one=True)['m']
     try:
         query(
-            'INSERT INTO supply_order (orderID, supplierID, cost, order_date, delivery_date) VALUES (%s,%s,%s,%s,%s)',
-            (max_id+1, supplier_id, cost, order_date, delivery_date), commit=True
+            'INSERT INTO supply_order (supplierID, cost, order_date, delivery_date) VALUES (%s,%s,%s,%s)',
+            (supplier_id, cost, order_date, delivery_date), commit=True
         )
         flash('Supply order added.', 'success')
     except Exception as e:
@@ -504,7 +666,7 @@ def supply_order_add():
 # ---------------------------------------------------------------------------
 
 @app.route('/export/appointments')
-@login_required
+@admin_required
 def export_appointments():
     rows = query(
         '''SELECT a.appointmentID, c.customer_name, c.phone_number,
@@ -533,7 +695,7 @@ def export_appointments():
 
 
 @app.route('/export/customers')
-@login_required
+@admin_required
 def export_customers():
     rows = query('SELECT * FROM customer ORDER BY customer_name')
     output = io.StringIO()
@@ -551,7 +713,7 @@ def export_customers():
 # ---------------------------------------------------------------------------
 
 @app.route('/reports/tech-appointments')
-@login_required
+@admin_required
 def tech_appointments_report():
     technicians_list = query('SELECT * FROM technician ORDER BY technician_name')
     result = None

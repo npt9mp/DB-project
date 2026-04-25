@@ -1,29 +1,37 @@
 import pymysql
 import pymysql.cursors
-from config import DB_HOST, DB_USER, DB_PASSWORD, DB_NAME
+from config import (CUSTOMER_DB_PASSWORD, CUSTOMER_DB_USER, DB_HOST,
+                    DB_NAME, DB_PASSWORD, DB_USER)
 
 
-def get_db():
+def get_db(customer=False, customer_id=None):
     """Return a new database connection with DictCursor."""
-    return pymysql.connect(
+    user = CUSTOMER_DB_USER if customer else DB_USER
+    password = CUSTOMER_DB_PASSWORD if customer else DB_PASSWORD
+
+    conn = pymysql.connect(
         host=DB_HOST,
-        user=DB_USER,
-        password=DB_PASSWORD,
+        user=user,
+        password=password,
         database=DB_NAME,
         cursorclass=pymysql.cursors.DictCursor,
         charset='utf8mb4',
         autocommit=False,
     )
+    if customer_id is not None:
+        with conn.cursor() as cur:
+            cur.execute('SET @app_customer_id = %s', (customer_id,))
+    return conn
 
 
-def query(sql, args=None, one=False, commit=False):
+def query(sql, args=None, one=False, commit=False, customer=False, customer_id=None):
     """
     Execute a SQL statement and return results.
     - one=True  → return a single row dict (or None)
     - commit=True → commit after execution (for INSERT/UPDATE/DELETE)
     Returns (rows, lastrowid) for write queries, rows for reads.
     """
-    conn = get_db()
+    conn = get_db(customer=customer, customer_id=customer_id)
     try:
         with conn.cursor() as cur:
             cur.execute(sql, args or ())
