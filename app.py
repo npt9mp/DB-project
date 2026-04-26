@@ -60,6 +60,25 @@ def current_customer_id():
     return session.get('customer_id')
 
 
+def normalize_datetime_local(value):
+    return value.replace('T', ' ') if value else value
+
+
+def customer_appointment_time_is_valid(value):
+    appt_dt = datetime.strptime(value, '%Y-%m-%d %H:%M')
+    starts_at_open = appt_dt.hour > 9 or (appt_dt.hour == 9 and appt_dt.minute >= 0)
+    before_close = appt_dt.hour < 17
+    five_minute_increment = appt_dt.minute % 5 == 0
+    return starts_at_open and before_close and five_minute_increment
+
+
+def appointment_date_matches(row, date_filter):
+    appointment_value = row.get('appointment_date')
+    if hasattr(appointment_value, 'date'):
+        return appointment_value.date().isoformat() == date_filter
+    return str(appointment_value).split()[0] == date_filter
+
+
 def clear_result_sets(cur):
     while cur.nextset():
         pass
@@ -181,7 +200,7 @@ def dashboard():
     total_technicians = query('SELECT COUNT(*) AS n FROM technician', one=True)['n']
 
     today_appts = query(
-        'SELECT COUNT(*) AS n FROM appointment WHERE appointment_date = %s',
+        'SELECT COUNT(*) AS n FROM appointment WHERE DATE(appointment_date) = %s',
         (today,), one=True
     )['n']
 
@@ -319,7 +338,7 @@ def appointments():
     if is_customer():
         rows = call_customer_procedure('CALL customer_view_appointments()')
         if date_filter:
-            rows = [row for row in rows if str(row['appointment_date']) == date_filter]
+            rows = [row for row in rows if appointment_date_matches(row, date_filter)]
         return render_template('appointments.html',
             appointments=rows,
             technicians=[],
@@ -342,7 +361,7 @@ def appointments():
     '''
     args = []
     if date_filter:
-        sql += ' AND a.appointment_date = %s'
+        sql += ' AND DATE(a.appointment_date) = %s'
         args.append(date_filter)
     if tech_filter:
         sql += ' AND s.technicianID = %s'
@@ -366,7 +385,7 @@ def appointment_add():
     if is_customer():
         customers_list = []
         services_list = call_customer_procedure('CALL customer_view_services()')
-        technicians_list = []
+        technicians_list = query('SELECT technicianID, technician_name FROM technician ORDER BY technician_name')
     else:
         customers_list  = query('SELECT * FROM customer ORDER BY customer_name')
         services_list   = query('SELECT * FROM service ORDER BY service_name')
@@ -374,7 +393,10 @@ def appointment_add():
 
     if request.method == 'POST':
         if is_customer():
-            appt_date = request.form['appointment_date']
+            appt_date = normalize_datetime_local(request.form['appointment_date'])
+            if not customer_appointment_time_is_valid(appt_date):
+                flash('Customer appointments must be between 9:00 AM and 5:00 PM in 5-minute increments.', 'warning')
+                return redirect(url_for('appointment_add'))
             conn = get_db(customer=True, customer_id=current_customer_id())
             try:
                 with conn.cursor() as cur:
@@ -394,7 +416,7 @@ def appointment_add():
         cid          = int(request.form['customerID'])
         service_name = request.form['service_name']
         tech_id      = int(request.form['technicianID'])
-        appt_date    = request.form['appointment_date']
+        appt_date    = normalize_datetime_local(request.form['appointment_date'])
 
         # Look up service cost
         svc = query('SELECT service_cost FROM service WHERE service_name=%s', (service_name,), one=True)
@@ -436,6 +458,7 @@ def appointment_add():
         services=services_list,
         technicians=technicians_list,
         today=date.today().isoformat(),
+        now=datetime.now().strftime('%Y-%m-%dT%H:%M'),
     )
 
 

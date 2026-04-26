@@ -3,9 +3,10 @@ DB_USER     = 'npt9mp'
 DB_PASSWORD = '23Corkscrews?'
 DB_NAME     = 'npt9mp'
 
-#customer 
-CUSTOMER_DB_USER = 'npt9mp_customer_app'
-CUSTOMER_DB_PASSWORD = 'customer_app_password'
+# Fallback for the shared UVA MySQL server: your account cannot CREATE USER,
+# so customer procedure calls use the same DB login as the main app.
+CUSTOMER_DB_USER = DB_USER
+CUSTOMER_DB_PASSWORD = DB_PASSWORD
 
 SECRET_KEY  = 'nail-salon-cs4750-secret-2026'
 

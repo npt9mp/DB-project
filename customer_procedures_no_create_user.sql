@@ -1,11 +1,3 @@
-CREATE USER IF NOT EXISTS 'npt9mp_customer_app'@'%'
-IDENTIFIED BY 'customer_app_password';
-
-ALTER USER 'npt9mp_customer_app'@'%'
-IDENTIFIED BY 'customer_app_password';
-
-REVOKE ALL PRIVILEGES, GRANT OPTION FROM 'npt9mp_customer_app'@'%';
-
 ALTER TABLE customer
     MODIFY customerID INT NOT NULL AUTO_INCREMENT;
 
@@ -114,20 +106,3 @@ BEGIN
 END//
 
 DELIMITER ;
-
-GRANT EXECUTE ON PROCEDURE customer_book_appointment
-TO 'npt9mp_customer_app'@'%';
-
-GRANT EXECUTE ON PROCEDURE customer_register
-TO 'npt9mp_customer_app'@'%';
-
-GRANT EXECUTE ON PROCEDURE customer_view_appointments
-TO 'npt9mp_customer_app'@'%';
-
-GRANT EXECUTE ON PROCEDURE customer_view_purchases
-TO 'npt9mp_customer_app'@'%';
-
-GRANT EXECUTE ON PROCEDURE customer_view_services
-TO 'npt9mp_customer_app'@'%';
-
-FLUSH PRIVILEGES;

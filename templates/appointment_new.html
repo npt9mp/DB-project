@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Book Appointment{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h2><i class="bi bi-calendar-plus me-2" style="color:#e91e8c;"></i>Book New Appointment</h2>
+</div>
+<div class="card border-0 shadow-sm rounded-4 p-4" style="max-width:540px;">
+  <form method="POST">
+    {% if session.role == 'admin' %}
+      <div class="mb-3">
+        <label class="form-label fw-semibold">Customer</label>
+        <select name="customerID" class="form-select" required>
+          <option value="">— Select customer —</option>
+          {% for c in customers %}
+          <option value="{{ c.customerID }}">{{ c.customer_name }} ({{ c.phone_number }})</option>
+          {% endfor %}
+        </select>
+      </div>
+    {% endif %}
+
+    <div class="mb-3">
+      <label class="form-label fw-semibold">Service</label>
+      <select name="service_name" class="form-select" required>
+        <option value="">— Select service —</option>
+        {% for s in services %}
+        <option value="{{ s.service_name }}">{{ s.service_name }} — ${{ "%.2f"|format(s.service_cost|float) }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="mb-3">
+      <label class="form-label fw-semibold">
+        {% if session.role == 'customer' %}Technician Preference{% else %}Technician{% endif %}
+      </label>
+      <select name="technicianID" class="form-select" required>
+        <option value="">— Select technician{% if session.role == 'customer' %} preference{% endif %} —</option>
+        {% for t in technicians %}
+        <option value="{{ t.technicianID }}">{{ t.technician_name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="mb-4">
+      <label class="form-label fw-semibold">Appointment Date and Time</label>
+      <input type="datetime-local" name="appointment_date" class="form-control" value="{{ now }}" step="300" required/>
+    </div>
+    <div class="d-flex gap-2">
+      <button type="submit" class="btn btn-accent">Book Appointment</button>
+      <a href="{{ url_for('appointments') }}" class="btn btn-outline-secondary">Cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}
