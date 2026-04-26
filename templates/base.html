@@ -97,8 +97,11 @@
 <div id="sidebar">
   <div class="brand"><i class="bi bi-gem"></i> Nail <span>Salon</span></div>
   <nav>
-    <a href="{{ url_for('appointments') }}"     class="{{ 'active' if 'appointment' in request.endpoint }}"><i class="bi bi-calendar-check"></i> Appointments</a>
+    <a href="{{ url_for('appointments') }}"     class="{{ 'active' if 'appointment' in request.endpoint and request.endpoint != 'technician_schedule' }}"><i class="bi bi-calendar-check"></i> {% if session.role == 'technician' %}Pending Appointments{% else %}Appointments{% endif %}</a>
     <a href="{{ url_for('services') }}"         class="{{ 'active' if request.endpoint=='services' }}"><i class="bi bi-scissors"></i> Services</a>
+    {% if session.role == 'technician' %}
+      <a href="{{ url_for('technician_schedule') }}" class="{{ 'active' if request.endpoint=='technician_schedule' }}"><i class="bi bi-calendar-week"></i> My Schedule</a>
+    {% endif %}
     {% if session.role == 'admin' %}
       <a href="{{ url_for('dashboard') }}"        class="{{ 'active' if request.endpoint=='dashboard' }}"><i class="bi bi-speedometer2"></i> Dashboard</a>
       <a href="{{ url_for('customers') }}"        class="{{ 'active' if 'customer' in request.endpoint }}"><i class="bi bi-people"></i> Customers</a>

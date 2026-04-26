@@ -39,6 +39,19 @@ def admin_required(f):
     return wrapper
 
 
+def technician_required(f):
+    from functools import wraps
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        if 'user' not in session:
+            return redirect(url_for('login'))
+        if session.get('role') != 'technician':
+            flash('Technicians only.', 'warning')
+            return redirect(url_for('dashboard'))
+        return f(*args, **kwargs)
+    return wrapper
+
+
 CUSTOMER_ALLOWED_ENDPOINTS = {
     'static',
     'index',
@@ -56,8 +69,16 @@ def is_customer():
     return session.get('role') == 'customer'
 
 
+def is_technician():
+    return session.get('role') == 'technician'
+
+
 def current_customer_id():
     return session.get('customer_id')
+
+
+def current_technician_id():
+    return session.get('technician_id')
 
 
 def normalize_datetime_local(value):
@@ -77,6 +98,10 @@ def appointment_date_matches(row, date_filter):
     if hasattr(appointment_value, 'date'):
         return appointment_value.date().isoformat() == date_filter
     return str(appointment_value).split()[0] == date_filter
+
+
+def encode_service_names(service_names):
+    return '|'.join(service_names)
 
 
 def clear_result_sets(cur):
@@ -115,6 +140,8 @@ def restrict_customer_routes():
 def index():
     if is_customer():
         return redirect(url_for('appointments'))
+    if is_technician():
+        return redirect(url_for('appointments'))
     return redirect(url_for('dashboard'))
 
 
@@ -140,6 +167,20 @@ def login():
             session['user'] = customer['customer_name']
             session['role'] = 'customer'
             session['customer_id'] = customer['customerID']
+            flash('Welcome back!', 'success')
+            return redirect(url_for('appointments'))
+
+        technician = query(
+            '''SELECT technicianID, technician_name
+               FROM technician
+               WHERE LOWER(technician_name) = LOWER(%s) AND phone = %s''',
+            (username, password),
+            one=True,
+        )
+        if technician:
+            session['user'] = technician['technician_name']
+            session['role'] = 'technician'
+            session['technician_id'] = technician['technicianID']
             flash('Welcome back!', 'success')
             return redirect(url_for('appointments'))
 
@@ -190,7 +231,7 @@ def logout():
 @app.route('/dashboard')
 @login_required
 def dashboard():
-    if is_customer():
+    if is_customer() or is_technician():
         return redirect(url_for('appointments'))
 
     today = date.today().isoformat()
@@ -346,11 +387,35 @@ def appointments():
             tech_filter='',
         )
 
+    if is_technician():
+        sql = '''
+            SELECT a.appointmentID, c.customer_name, a.appointment_date,
+                   GROUP_CONCAT(o.service_name ORDER BY o.service_name SEPARATOR ", ") AS services,
+                   a.status
+            FROM appointment a
+            JOIN customer c ON a.customerID = c.customerID
+            LEFT JOIN orders o ON a.appointmentID = o.appointmentID
+            WHERE a.status = 'pending'
+        '''
+        args = []
+        if date_filter:
+            sql += ' AND DATE(a.appointment_date) = %s'
+            args.append(date_filter)
+        sql += ' GROUP BY a.appointmentID, c.customer_name, a.appointment_date, a.status'
+        sql += ' ORDER BY a.appointment_date ASC, a.appointmentID ASC'
+        rows = query(sql, args)
+        return render_template('appointments.html',
+            appointments=rows,
+            technicians=[],
+            date_filter=date_filter,
+            tech_filter='',
+        )
+
     sql = '''
         SELECT a.appointmentID, c.customer_name, c.customerID,
                a.appointment_date,
                GROUP_CONCAT(o.service_name ORDER BY o.service_name SEPARATOR ", ") AS services,
-               p.cost, t.technician_name, t.technicianID
+               p.cost, t.technician_name, t.technicianID, a.status
         FROM appointment a
         JOIN customer c ON a.customerID = c.customerID
         LEFT JOIN purchase p ON a.purchaseID = p.purchaseID
@@ -366,7 +431,7 @@ def appointments():
     if tech_filter:
         sql += ' AND s.technicianID = %s'
         args.append(tech_filter)
-    sql += ' GROUP BY a.appointmentID, c.customer_name, c.customerID, a.appointment_date, p.cost, t.technician_name, t.technicianID'
+    sql += ' GROUP BY a.appointmentID, c.customer_name, c.customerID, a.appointment_date, p.cost, t.technician_name, t.technicianID, a.status'
     sql += ' ORDER BY a.appointment_date DESC, a.appointmentID DESC'
 
     rows = query(sql, args)
@@ -385,7 +450,7 @@ def appointment_add():
     if is_customer():
         customers_list = []
         services_list = call_customer_procedure('CALL customer_view_services()')
-        technicians_list = query('SELECT technicianID, technician_name FROM technician ORDER BY technician_name')
+        technicians_list = []
     else:
         customers_list  = query('SELECT * FROM customer ORDER BY customer_name')
         services_list   = query('SELECT * FROM service ORDER BY service_name')
@@ -393,14 +458,23 @@ def appointment_add():
 
     if request.method == 'POST':
         if is_customer():
-            appt_date = normalize_datetime_local(request.form['appointment_date'])
+            appt_day = request.form['appointment_date']
+            appt_time = request.form['appointment_time']
+            appt_date = f'{appt_day} {appt_time}'
+            service_names = request.form.getlist('service_name')
+            if not service_names:
+                flash('Please choose at least one service.', 'warning')
+                return redirect(url_for('appointment_add'))
             if not customer_appointment_time_is_valid(appt_date):
                 flash('Customer appointments must be between 9:00 AM and 5:00 PM in 5-minute increments.', 'warning')
                 return redirect(url_for('appointment_add'))
             conn = get_db(customer=True, customer_id=current_customer_id())
             try:
                 with conn.cursor() as cur:
-                    cur.execute('CALL customer_book_appointment(%s, @new_appointment_id)', (appt_date,))
+                    cur.execute(
+                        'CALL customer_book_appointment(%s, %s, @new_appointment_id)',
+                        (appt_date, encode_service_names(service_names))
+                    )
                     clear_result_sets(cur)
                     cur.execute('SELECT @new_appointment_id AS appointmentID')
                     cur.fetchone()
@@ -414,13 +488,20 @@ def appointment_add():
                 conn.close()
 
         cid          = int(request.form['customerID'])
-        service_name = request.form['service_name']
+        service_names = request.form.getlist('service_name')
         tech_id      = int(request.form['technicianID'])
         appt_date    = normalize_datetime_local(request.form['appointment_date'])
+        if not service_names:
+            flash('Please choose at least one service.', 'warning')
+            return redirect(url_for('appointment_add'))
 
-        # Look up service cost
-        svc = query('SELECT service_cost FROM service WHERE service_name=%s', (service_name,), one=True)
-        cost = float(svc['service_cost']) if svc else 0.0
+        placeholders = ', '.join(['%s'] * len(service_names))
+        svc_total = query(
+            f'SELECT COALESCE(SUM(service_cost), 0) AS total FROM service WHERE service_name IN ({placeholders})',
+            service_names,
+            one=True,
+        )
+        cost = float(svc_total['total']) if svc_total else 0.0
 
         import pymysql
         conn = __import__('db').get_db()
@@ -434,13 +515,14 @@ def appointment_add():
                 purchase_id = cur.lastrowid
                 # 2. appointment
                 cur.execute(
-                    'INSERT INTO appointment (customerID, purchaseID, appointment_date) VALUES (%s,%s,%s)',
-                    (cid, purchase_id, appt_date)
+                    'INSERT INTO appointment (customerID, purchaseID, appointment_date, status) VALUES (%s,%s,%s,%s)',
+                    (cid, purchase_id, appt_date, 'assigned')
                 )
                 appt_id = cur.lastrowid
                 # 3. orders
-                cur.execute('INSERT INTO orders (service_name, appointmentID) VALUES (%s,%s)',
-                            (service_name, appt_id))
+                for service_name in service_names:
+                    cur.execute('INSERT INTO orders (service_name, appointmentID) VALUES (%s,%s)',
+                                (service_name, appt_id))
                 # 4. schedules
                 cur.execute('INSERT INTO schedules (technicianID, appointmentID) VALUES (%s,%s)',
                             (tech_id, appt_id))
@@ -459,6 +541,14 @@ def appointment_add():
         technicians=technicians_list,
         today=date.today().isoformat(),
         now=datetime.now().strftime('%Y-%m-%dT%H:%M'),
+        customer_times=[
+            (
+                f'{hour:02d}:{minute:02d}',
+                datetime.strptime(f'{hour:02d}:{minute:02d}', '%H:%M').strftime('%-I:%M %p'),
+            )
+            for hour in range(9, 17)
+            for minute in range(0, 60, 5)
+        ],
     )
 
 
@@ -486,6 +576,83 @@ def appointment_delete(aid):
     finally:
         conn.close()
     return redirect(url_for('appointments'))
+
+
+@app.route('/appointments/<int:aid>/accept', methods=['POST'])
+@technician_required
+def appointment_accept(aid):
+    conn = get_db()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                '''SELECT appointmentID
+                   FROM appointment
+                   WHERE appointmentID = %s AND status = 'pending' ''',
+                (aid,)
+            )
+            appointment = cur.fetchone()
+            if not appointment:
+                flash('Appointment is no longer pending.', 'warning')
+                return redirect(url_for('appointments'))
+
+            cur.execute(
+                '''INSERT INTO schedules (technicianID, appointmentID)
+                   SELECT %s, %s
+                   WHERE NOT EXISTS (
+                       SELECT 1 FROM schedules WHERE appointmentID = %s
+                   )''',
+                (current_technician_id(), aid, aid)
+            )
+            cur.execute(
+                "UPDATE appointment SET status = 'assigned' WHERE appointmentID = %s",
+                (aid,)
+            )
+        conn.commit()
+        flash('Appointment added to your schedule.', 'success')
+        return redirect(url_for('technician_schedule'))
+    except Exception as e:
+        conn.rollback()
+        flash(f'Error accepting appointment: {e}', 'danger')
+        return redirect(url_for('appointments'))
+    finally:
+        conn.close()
+
+
+@app.route('/technician/schedule')
+@technician_required
+def technician_schedule():
+    rows = query(
+        '''SELECT a.appointmentID, c.customer_name, a.appointment_date,
+                  GROUP_CONCAT(o.service_name ORDER BY o.service_name SEPARATOR ", ") AS services,
+                  a.status
+           FROM schedules s
+           JOIN appointment a ON s.appointmentID = a.appointmentID
+           JOIN customer c ON a.customerID = c.customerID
+           LEFT JOIN orders o ON a.appointmentID = o.appointmentID
+           WHERE s.technicianID = %s
+             AND a.status IN ('assigned', 'completed')
+           GROUP BY a.appointmentID, c.customer_name, a.appointment_date, a.status
+           ORDER BY a.appointment_date ASC, a.appointmentID ASC''',
+        (current_technician_id(),)
+    )
+    return render_template('technician_schedule.html', appointments=rows)
+
+
+@app.route('/appointments/<int:aid>/complete', methods=['POST'])
+@technician_required
+def appointment_complete(aid):
+    updated = query(
+        '''UPDATE appointment a
+           JOIN schedules s ON a.appointmentID = s.appointmentID
+           SET a.status = 'completed'
+           WHERE a.appointmentID = %s
+             AND s.technicianID = %s
+             AND a.status = 'assigned' ''',
+        (aid, current_technician_id()),
+        commit=True,
+    )
+    flash('Appointment marked complete.', 'success')
+    return redirect(url_for('technician_schedule'))
 
 
 # ---------------------------------------------------------------------------

@@ -2,10 +2,12 @@
 {% block title %}Appointments{% endblock %}
 {% block content %}
 <div class="page-header d-flex justify-content-between align-items-center">
-  <h2><i class="bi bi-calendar-check me-2" style="color:#e91e8c;"></i>Appointments</h2>
-  <a href="{{ url_for('appointment_add') }}" class="btn btn-accent">
-    <i class="bi bi-plus-lg me-1"></i>Book Appointment
-  </a>
+  <h2><i class="bi bi-calendar-check me-2" style="color:#e91e8c;"></i>{% if session.role == 'technician' %}Pending Appointments{% else %}Appointments{% endif %}</h2>
+  {% if session.role != 'technician' %}
+    <a href="{{ url_for('appointment_add') }}" class="btn btn-accent">
+      <i class="bi bi-plus-lg me-1"></i>Book Appointment
+    </a>
+  {% endif %}
 </div>
 
 <!-- Filters -->
@@ -47,9 +49,11 @@
       <thead>
         <tr>
           <th>#</th>
-          {% if session.role == 'admin' %}<th>Customer</th>{% endif %}
+          {% if session.role in ['admin', 'technician'] %}<th>Customer</th>{% endif %}
           <th>Date</th>
           <th>Services</th>
+          {% if session.role != 'technician' %}<th>Status</th>{% endif %}
+          {% if session.role == 'technician' %}<th>Status</th><th class="text-end">Accept</th>{% endif %}
           {% if session.role == 'admin' %}<th>Technician</th><th>Cost</th><th class="text-end">Action</th>{% endif %}
         </tr>
       </thead>
@@ -57,9 +61,30 @@
         {% for a in appointments %}
         <tr>
           <td class="text-muted">{{ a.appointmentID }}</td>
-          {% if session.role == 'admin' %}<td><strong>{{ a.customer_name }}</strong></td>{% endif %}
+          {% if session.role in ['admin', 'technician'] %}<td><strong>{{ a.customer_name }}</strong></td>{% endif %}
           <td>{{ a.appointment_date }}</td>
           <td><span class="text-muted small">{{ a.services or '—' }}</span></td>
+          {% if session.role != 'technician' %}
+            <td>
+              {% if a.status == 'completed' %}
+                <span class="badge text-bg-success">completed</span>
+              {% elif a.status == 'assigned' %}
+                <span class="badge text-bg-primary">assigned</span>
+              {% else %}
+                <span class="badge text-bg-warning">pending</span>
+              {% endif %}
+            </td>
+          {% endif %}
+          {% if session.role == 'technician' %}
+            <td><span class="badge text-bg-warning">{{ a.status }}</span></td>
+            <td class="text-end">
+              <form method="POST" action="{{ url_for('appointment_accept', aid=a.appointmentID) }}" class="d-inline">
+                <button class="btn btn-sm btn-outline-success" title="Accept appointment">
+                  <i class="bi bi-check-square"></i>
+                </button>
+              </form>
+            </td>
+          {% endif %}
           {% if session.role == 'admin' %}
             <td>{{ a.technician_name or '—' }}</td>
             <td>{{ '$%.2f'|format(a.cost|float) if a.cost else '—' }}</td>
@@ -72,7 +97,7 @@
           {% endif %}
         </tr>
         {% else %}
-        <tr><td colspan="{{ 7 if session.role == 'admin' else 3 }}" class="text-center text-muted py-4">No appointments found.</td></tr>
+        <tr><td colspan="{% if session.role == 'admin' %}8{% elif session.role == 'technician' %}6{% else %}4{% endif %}" class="text-center text-muted py-4">No appointments found.</td></tr>
         {% endfor %}
       </tbody>
     </table>
