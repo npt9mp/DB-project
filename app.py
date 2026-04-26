@@ -132,7 +132,7 @@ def login():
         customer = query(
             '''SELECT customerID, customer_name
                FROM customer
-               WHERE CAST(customerID AS CHAR) = %s AND phone_number = %s''',
+               WHERE LOWER(customer_name) = LOWER(%s) AND phone_number = %s''',
             (username, password),
             one=True,
         )
