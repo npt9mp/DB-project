@@ -97,18 +97,18 @@
 <div id="sidebar">
   <div class="brand"><i class="bi bi-gem"></i> Nail <span>Salon</span></div>
   <nav>
-    <a href="{{ url_for('appointments') }}"     class="{{ 'active' if 'appointment' in request.endpoint and request.endpoint != 'technician_schedule' }}"><i class="bi bi-calendar-check"></i> {% if session.role == 'technician' %}Pending Appointments{% else %}Appointments{% endif %}</a>
+    {% if session.role != 'admin' %}
+      <a href="{{ url_for('appointments') }}" class="{{ 'active' if 'appointment' in request.endpoint and request.endpoint != 'technician_schedule' }}"><i class="bi bi-calendar-check"></i> {% if session.role == 'technician' %}Pending Appointments{% else %}Appointments{% endif %}</a>
+    {% endif %}
     <a href="{{ url_for('services') }}"         class="{{ 'active' if request.endpoint=='services' }}"><i class="bi bi-scissors"></i> Services</a>
     {% if session.role == 'technician' %}
       <a href="{{ url_for('technician_schedule') }}" class="{{ 'active' if request.endpoint=='technician_schedule' }}"><i class="bi bi-calendar-week"></i> My Schedule</a>
     {% endif %}
     {% if session.role == 'admin' %}
-      <a href="{{ url_for('dashboard') }}"        class="{{ 'active' if request.endpoint=='dashboard' }}"><i class="bi bi-speedometer2"></i> Dashboard</a>
       <a href="{{ url_for('customers') }}"        class="{{ 'active' if 'customer' in request.endpoint }}"><i class="bi bi-people"></i> Customers</a>
       <a href="{{ url_for('technicians') }}"      class="{{ 'active' if 'technician' in request.endpoint }}"><i class="bi bi-person-badge"></i> Technicians</a>
       <a href="{{ url_for('products') }}"         class="{{ 'active' if 'product' in request.endpoint }}"><i class="bi bi-box-seam"></i> Inventory</a>
       <a href="{{ url_for('supply_orders') }}"    class="{{ 'active' if 'supply' in request.endpoint }}"><i class="bi bi-truck"></i> Supply Orders</a>
-      <a href="{{ url_for('tech_appointments_report') }}" class="{{ 'active' if 'report' in request.endpoint }}"><i class="bi bi-bar-chart"></i> Reports</a>
     {% endif %}
   </nav>
   <div class="logout-link">

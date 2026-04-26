@@ -12,19 +12,33 @@
   <div class="card-header">{{ orders|length }} order{{ 's' if orders|length != 1 }}</div>
   <div class="table-responsive">
     <table class="table table-hover mb-0">
-      <thead><tr><th>#</th><th>Supplier</th><th>City</th><th>Order Date</th><th>Delivery Date</th><th>Cost</th></tr></thead>
+      <thead><tr><th>Supplier</th><th>City</th><th>Order Date</th><th>Delivery Date</th><th>Cost</th><th>Status</th><th class="text-end">Actions</th></tr></thead>
       <tbody>
         {% for o in orders %}
         <tr>
-          <td class="text-muted">{{ o.orderID }}</td>
           <td><strong>{{ o.supplier_name }}</strong></td>
           <td>{{ o.city }}</td>
           <td>{{ o.order_date }}</td>
           <td>{{ o.delivery_date }}</td>
           <td>${{ "%.2f"|format(o.cost|float) }}</td>
+          <td>
+            {% if o.status == 'delivered' %}
+              <span class="badge text-bg-success">delivered</span>
+            {% else %}
+              <span class="badge text-bg-warning">pending</span>
+            {% endif %}
+          </td>
+          <td class="text-end">
+            <a href="{{ url_for('supply_order_items', order_id=o.orderID) }}" class="btn btn-sm btn-outline-primary">Items</a>
+            {% if o.status != 'delivered' %}
+              <form method="POST" action="{{ url_for('supply_order_arrive', order_id=o.orderID) }}" class="d-inline">
+                <button class="btn btn-sm btn-outline-success">Mark Arrived</button>
+              </form>
+            {% endif %}
+          </td>
         </tr>
         {% else %}
-        <tr><td colspan="6" class="text-center text-muted py-4">No supply orders.</td></tr>
+        <tr><td colspan="7" class="text-center text-muted py-4">No supply orders.</td></tr>
         {% endfor %}
       </tbody>
     </table>
@@ -41,12 +55,26 @@
         <div class="modal-body">
           <div class="mb-3">
             <label class="form-label fw-semibold">Supplier</label>
-            <select name="supplierID" class="form-select" required>
+            <select name="supplierID" class="form-select">
               <option value="">— Select supplier —</option>
               {% for s in suppliers %}
               <option value="{{ s.supplierID }}">{{ s.supplier_name }} ({{ s.city }})</option>
               {% endfor %}
             </select>
+          </div>
+          <hr/>
+          <div class="mb-2 fw-semibold">Or Add New Supplier</div>
+          <div class="mb-3">
+            <label class="form-label fw-semibold">Supplier Name</label>
+            <input type="text" name="new_supplier_name" class="form-control"/>
+          </div>
+          <div class="mb-3">
+            <label class="form-label fw-semibold">City</label>
+            <input type="text" name="new_supplier_city" class="form-control"/>
+          </div>
+          <div class="mb-3">
+            <label class="form-label fw-semibold">Phone Number</label>
+            <input type="text" name="new_supplier_phone" class="form-control"/>
           </div>
           <div class="mb-3">
             <label class="form-label fw-semibold">Total Cost ($)</label>

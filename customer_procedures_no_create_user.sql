@@ -1,6 +1,13 @@
 ALTER TABLE customer
     MODIFY customerID INT NOT NULL AUTO_INCREMENT;
 
+ALTER TABLE customer
+    ADD COLUMN IF NOT EXISTS password VARCHAR(50) NULL;
+
+UPDATE customer
+SET password = CONCAT('Luffy', customerID + 100)
+WHERE password IS NULL OR password = '';
+
 ALTER TABLE purchase
     MODIFY purchaseID INT NOT NULL AUTO_INCREMENT;
 
@@ -21,48 +28,33 @@ SET status = 'assigned'
 WHERE status = 'pending'
   AND appointmentID IN (SELECT appointmentID FROM schedules);
 
-DROP PROCEDURE IF EXISTS migrate_preferred_services_to_orders;
-
-DELIMITER //
-CREATE PROCEDURE migrate_preferred_services_to_orders()
-BEGIN
-    IF EXISTS (
-        SELECT 1
-        FROM information_schema.COLUMNS
-        WHERE TABLE_SCHEMA = DATABASE()
-          AND TABLE_NAME = 'appointment'
-          AND COLUMN_NAME = 'preferred_service_name'
-    ) THEN
-        SET @migration_sql = '
-            INSERT INTO orders (service_name, appointmentID)
-            SELECT a.preferred_service_name, a.appointmentID
-            FROM appointment a
-            JOIN service s ON s.service_name = a.preferred_service_name
-            WHERE a.preferred_service_name IS NOT NULL
-              AND NOT EXISTS (
-                  SELECT 1 FROM orders o WHERE o.appointmentID = a.appointmentID
-              )';
-        PREPARE migration_stmt FROM @migration_sql;
-        EXECUTE migration_stmt;
-        DEALLOCATE PREPARE migration_stmt;
-    END IF;
-END//
-DELIMITER ;
-
-CALL migrate_preferred_services_to_orders();
-DROP PROCEDURE IF EXISTS migrate_preferred_services_to_orders;
-
-ALTER TABLE appointment
-    DROP COLUMN IF EXISTS preferredTechnicianID;
-
-ALTER TABLE appointment
-    DROP COLUMN IF EXISTS preferred_service_name;
-
 ALTER TABLE technician
     MODIFY technicianID INT NOT NULL AUTO_INCREMENT;
 
+ALTER TABLE technician
+    ADD COLUMN IF NOT EXISTS password VARCHAR(50) NULL;
+
+UPDATE technician
+SET password = CONCAT('Zoro', technicianID + 200)
+WHERE password IS NULL OR password = '';
+
+ALTER TABLE supplier
+    MODIFY supplierID INT NOT NULL AUTO_INCREMENT;
+
 ALTER TABLE supply_order
     MODIFY orderID INT NOT NULL AUTO_INCREMENT;
+
+ALTER TABLE supply_order
+    ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'pending';
+
+CREATE TABLE IF NOT EXISTS includes (
+    orderID INT NOT NULL,
+    product_name VARCHAR(30) NOT NULL,
+    quantity INT NOT NULL DEFAULT 0,
+    PRIMARY KEY (orderID, product_name),
+    FOREIGN KEY (orderID) REFERENCES supply_order(orderID),
+    FOREIGN KEY (product_name) REFERENCES product(product_name)
+);
 
 UPDATE appointment
 SET appointment_date = TIMESTAMP(DATE(appointment_date), '09:00:00')
@@ -79,34 +71,23 @@ DELIMITER //
 CREATE PROCEDURE customer_register(
     IN p_customer_name VARCHAR(255),
     IN p_phone_number VARCHAR(50),
+    IN p_password VARCHAR(50),
     OUT p_customer_id INT
 )
-SQL SECURITY DEFINER
 BEGIN
-    INSERT INTO customer (customer_name, phone_number)
-    VALUES (p_customer_name, p_phone_number);
+    INSERT INTO customer (customer_name, phone_number, password)
+    VALUES (p_customer_name, p_phone_number, p_password);
 
     SET p_customer_id = LAST_INSERT_ID();
 END//
 
 CREATE PROCEDURE customer_book_appointment(
     IN p_appointment_date DATETIME,
-    IN p_service_names TEXT,
+    IN p_total_cost DECIMAL(10,2),
     OUT p_appointment_id INT
 )
-SQL SECURITY DEFINER
 BEGIN
-    DECLARE v_remaining TEXT;
-    DECLARE v_service_name VARCHAR(255);
-    DECLARE v_pos INT DEFAULT 0;
-    DECLARE v_service_cost DECIMAL(10,2) DEFAULT 0;
-    DECLARE v_total_cost DECIMAL(10,2) DEFAULT 0;
     DECLARE v_purchase_id INT;
-
-    IF @app_customer_id IS NULL THEN
-        SIGNAL SQLSTATE '45000'
-            SET MESSAGE_TEXT = 'Customer session is not set.';
-    END IF;
 
     IF TIME(p_appointment_date) < '09:00:00'
        OR TIME(p_appointment_date) >= '17:00:00'
@@ -116,38 +97,13 @@ BEGIN
             SET MESSAGE_TEXT = 'Customer appointments must be between 9:00 AM and 5:00 PM in 5-minute increments.';
     END IF;
 
-    IF p_service_names IS NULL OR p_service_names = '' THEN
+    IF p_total_cost IS NULL OR p_total_cost <= 0 THEN
         SIGNAL SQLSTATE '45000'
-            SET MESSAGE_TEXT = 'At least one service is required.';
+            SET MESSAGE_TEXT = 'Appointment cost must be greater than zero.';
     END IF;
 
-    SET v_remaining = p_service_names;
-    WHILE v_remaining <> '' DO
-        SET v_pos = LOCATE('|', v_remaining);
-        IF v_pos = 0 THEN
-            SET v_service_name = v_remaining;
-            SET v_remaining = '';
-        ELSE
-            SET v_service_name = SUBSTRING(v_remaining, 1, v_pos - 1);
-            SET v_remaining = SUBSTRING(v_remaining, v_pos + 1);
-        END IF;
-
-        SELECT COALESCE(
-            (SELECT service_cost FROM service WHERE service_name = v_service_name LIMIT 1),
-            -1
-        )
-        INTO v_service_cost;
-
-        IF v_service_cost < 0 THEN
-            SIGNAL SQLSTATE '45000'
-                SET MESSAGE_TEXT = 'Selected service does not exist.';
-        END IF;
-
-        SET v_total_cost = v_total_cost + v_service_cost;
-    END WHILE;
-
     INSERT INTO purchase (customerID, cost, purchase_date)
-    VALUES (@app_customer_id, v_total_cost, p_appointment_date);
+    VALUES (@app_customer_id, p_total_cost, p_appointment_date);
 
     SET v_purchase_id = LAST_INSERT_ID();
 
@@ -165,31 +121,10 @@ BEGIN
     );
 
     SET p_appointment_id = LAST_INSERT_ID();
-
-    SET v_remaining = p_service_names;
-    WHILE v_remaining <> '' DO
-        SET v_pos = LOCATE('|', v_remaining);
-        IF v_pos = 0 THEN
-            SET v_service_name = v_remaining;
-            SET v_remaining = '';
-        ELSE
-            SET v_service_name = SUBSTRING(v_remaining, 1, v_pos - 1);
-            SET v_remaining = SUBSTRING(v_remaining, v_pos + 1);
-        END IF;
-
-        INSERT INTO orders (service_name, appointmentID)
-        VALUES (v_service_name, p_appointment_id);
-    END WHILE;
 END//
 
 CREATE PROCEDURE customer_view_appointments()
-SQL SECURITY DEFINER
 BEGIN
-    IF @app_customer_id IS NULL THEN
-        SIGNAL SQLSTATE '45000'
-            SET MESSAGE_TEXT = 'Customer session is not set.';
-    END IF;
-
     SELECT a.appointmentID, a.customerID, a.purchaseID, a.appointment_date,
            GROUP_CONCAT(o.service_name ORDER BY o.service_name SEPARATOR ", ") AS services,
            a.status
@@ -201,13 +136,7 @@ BEGIN
 END//
 
 CREATE PROCEDURE customer_view_purchases()
-SQL SECURITY DEFINER
 BEGIN
-    IF @app_customer_id IS NULL THEN
-        SIGNAL SQLSTATE '45000'
-            SET MESSAGE_TEXT = 'Customer session is not set.';
-    END IF;
-
     SELECT purchaseID, customerID, cost, purchase_date
     FROM purchase
     WHERE customerID = @app_customer_id
@@ -215,7 +144,6 @@ BEGIN
 END//
 
 CREATE PROCEDURE customer_view_services()
-SQL SECURITY DEFINER
 BEGIN
     SELECT service_name, service_cost
     FROM service
