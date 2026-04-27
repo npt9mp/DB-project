@@ -253,7 +253,7 @@ def appt_add():
             finally:
                 conn.close()
 
-        return render_template('appointment_new.html', customers=[], services=services_list, technicians=[], today=date.today().isoformat(), now=datetime.now().strftime('%Y-%m-%dT%H:%M'), customer_times=[(f'{hour:02d}:{minute:02d}', datetime.strptime(f'{hour:02d}:{minute:02d}', '%H:%M').strftime('%-I:%M %p'),) for hour in range(9, 17) for minute in range(0, 60, 5)],)
+        return render_template('appointment_new.html', customers=[], services=services_list, technicians=[], today=date.today().isoformat(), now=datetime.now().strftime('%Y-%m-%dT%H:%M'), customer_times=[(f'{hour:02d}:{minute:02d}', datetime.strptime(f'{hour:02d}:{minute:02d}', '%H:%M').strftime('%I:%M %p').lstrip('0'),) for hour in range(9, 17) for minute in range(0, 60, 5)],)
 
     return redirect(url_for('customers'))
 
