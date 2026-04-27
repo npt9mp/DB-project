@@ -3,10 +3,11 @@ DB_USER     = 'npt9mp'
 DB_PASSWORD = '23Corkscrews?'
 DB_NAME     = 'npt9mp'
 
-# Fallback for the shared UVA MySQL server: your account cannot CREATE USER,
-# so customer procedure calls use the same DB login as the main app.
-CUSTOMER_DB_USER = DB_USER
-CUSTOMER_DB_PASSWORD = DB_PASSWORD
+# Restricted sub-account for end-user (customer) database connections.
+# npt9mp_a is granted EXECUTE-only on the five customer stored procedures,
+# so customers cannot directly read or modify any table.
+CUSTOMER_DB_USER     = 'npt9mp_a'
+CUSTOMER_DB_PASSWORD = 'Winter2026'
 
 SECRET_KEY  = 'nail-salon-cs4750-secret-2026'
 
